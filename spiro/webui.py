@@ -1,7 +1,6 @@
 # webui.py -
 #   main web ui controller for spiro
 #
-
 import io
 import os
 import re
@@ -28,7 +27,6 @@ class Rotator(Thread):
     def __init__(self, value):
         Thread.__init__(self)
         self.value = value
-    
     def run(self):
         lock.acquire()
         try:
@@ -40,17 +38,13 @@ class Rotator(Thread):
             hw.motorOn(False)
             lock.release()
 
-
 class StreamingOutput(object):
     def __init__(self):
         self.frame = None
         self.buffer = io.BytesIO()
         self.condition = Condition()
-
     def write(self, buf):
         if buf.startswith(b'\xff\xd8'):
-            # New frame, copy the existing buffer's content and notify all
-            # clients it's available
             self.buffer.truncate()
             with self.condition:
                 self.frame = self.buffer.getvalue()
@@ -58,12 +52,10 @@ class StreamingOutput(object):
             self.buffer.seek(0)
         return self.buffer.write(buf)
 
-
 class StillOutput(object):
     def __init__(self):
         self.frame = None
         self.buffer = io.BytesIO()
-
     def write(self, buf):
         if buf.startswith(b'\xff\xd8'):
             self.buffer.truncate()
@@ -71,44 +63,33 @@ class StillOutput(object):
             self.buffer.seek(0)
         return self.buffer.write(buf)
 
-
 class ZoomObject(object):
     def __init__(self):
         self.roi = 1
         self.x = 0.5
         self.y = 0.5
-    
     def set(self, x=None, y=None, roi=None):
-        '''convenience function for setting zoom/pan'''
         if x is not None: self.x = x
         if y is not None: self.y = y
         if roi is not None: self.roi = roi
         self.apply()
-
     def apply(self):
-        '''checks and applies zoom/pan values on camera object'''
         self.roi = max(min(self.roi, 1.0), 0.2)
         limits = (self.roi / 2.0, 1 - self.roi / 2.0)
         self.x = max(min(self.x, limits[1]), limits[0])
         self.y = max(min(self.y, limits[1]), limits[0])
         #camera.zoom = (self.y - self.roi/2.0, self.x - self.roi/2.0, self.roi, self.roi)
 
-
 def public_route(decorated_function):
-    '''decorator for routes that should be accessible without being logged in'''
     decorated_function.is_public = True
     return decorated_function
 
-
 def not_while_running(decorated_function):
-    '''decorator for routes that should be inaccessible while an experiment is running'''
     decorated_function.not_while_running = True
     return decorated_function
 
-
 @app.before_request
 def check_route_access():
-    '''checks if access to a certain route is granted. allows anything going to /static/ or that is marked public.'''
     if not request.endpoint: abort(404)
     if cfg.get('password') == '' and not any([request.endpoint == 'newpass', request.endpoint == 'static']):
         return redirect(url_for('newpass'))
@@ -117,10 +98,9 @@ def check_route_access():
             getattr(app.view_functions[request.endpoint], 'is_public', False)]):
         if experimenter.running and getattr(app.view_functions[request.endpoint], 'not_while_running', False):
             return redirect(url_for('empty'))
-        return  # Access granted
+        return
     else:
         return redirect(url_for('login'))
-
 
 def checkPass(pwd):
     if pwd:
@@ -128,7 +108,6 @@ def checkPass(pwd):
         if hash.hexdigest() == cfg.get('password'):
             return True
     return False
-
 
 @app.route('/index.html')
 @app.route('/')
@@ -139,11 +118,9 @@ def index():
         return render_template('restarting.html', refresh='60; url=/', message="Rebooting system...")
     return render_template('index.html', live=livestream, focus=cfg.get('focus'), led=hw.led, name=cfg.get('name'))
 
-
 @app.route('/empty')
 def empty():
     return render_template('unavailable.html', 409)
-
 
 @public_route
 @app.route('/login', methods=['GET', 'POST'])
@@ -161,13 +138,11 @@ def login():
     else:
         return render_template('login.html', name=cfg.get('name'))
 
-
 @public_route
 @app.route('/logout')
 def logout():
     session['password'] = ''
     return redirect(url_for('login'))
-
 
 @public_route
 @app.route('/newpass', methods=['GET', 'POST'])
@@ -196,13 +171,11 @@ def newpass():
     else:
         return render_template('newpass.html', nopass=cfg.get('password') == '', name=cfg.get('name'))
 
-
 @not_while_running
 @app.route('/zoom/<int:value>')
 def zoom(value):
     zoomer.set(roi=float(value / 100))
     return redirect(url_for('index'))
-
 
 @not_while_running
 @app.route('/pan/<dir>/<value>')
@@ -213,32 +186,25 @@ def pan(dir, value):
         zoomer.set(y = zoomer.y + float(value))
     return redirect(url_for('index'))
 
-
 @not_while_running
 @app.route('/live/<value>')
 def switch_live(value):
     if setLive(value):
         zoomer.set(0.5, 0.5, 1)
-
     if value == 'on':
         camera.set_controls({
             "AeEnable": True
         })
-
     return redirect(url_for('index'))
-
 
 def setLive(val):
     global livestream
     prev = livestream
-
     if val == 'on':
         livestream = True
     elif val == 'off':
         livestream = False
-
     return prev != livestream
-
 
 @not_while_running
 @app.route('/led/<value>')
@@ -249,7 +215,6 @@ def led(value):
         hw.LEDControl(False)
     return redirect(url_for('index'))
 
-
 @not_while_running
 @app.route('/rotate/<int:value>')
 def rotate(value):
@@ -257,7 +222,6 @@ def rotate(value):
         rotator = Rotator(value)
         rotator.start()
     return redirect(url_for('index'))
-
 
 @not_while_running
 @app.route('/findstart')
@@ -272,7 +236,6 @@ def findstart(value=None):
     hw.motorOn(False)
     return redirect(url_for('index'))
 
-
 def liveGen():
     while True:
         with liveoutput.condition:            
@@ -280,15 +243,12 @@ def liveGen():
         if got_frame:
             yield (b'--frame\r\nContent-Type: image/jpeg\r\n\r\n' + liveoutput.frame + b'\r\n')
         else:
-            # failed to acquire an image; return nothing instead of waiting
             yield b''
-            
 
 @not_while_running
 @app.route('/stream.mjpg')
 def liveStream():
     return Response(liveGen(), mimetype='multipart/x-mixed-replace; boundary=frame')
-
 
 @app.route('/nightstill.png')
 def nightStill():
@@ -297,14 +257,12 @@ def nightStill():
     nightstill.seek(0)
     return Response(nightstill.read(), mimetype="image/png")
 
-
 @app.route('/daystill.png')
 def dayStill():
     if daystill.seek(0, io.SEEK_END) == 0:
         return redirect(url_for('static', filename='empty.png'))
     daystill.seek(0)
     return Response(daystill.read(), mimetype="image/png")
-
 
 @app.route('/lastcapture/<int:num>.png')
 def lastCapture(num):
@@ -321,7 +279,6 @@ def lastCapture(num):
                 print("Could not read last captured image:", e)
                 return redirect(url_for('static', filename='empty.png'))
 
-
 @app.route('/preview/<int:num>.jpg')
 def preview(num):
     if num < 0 or num > 3:
@@ -336,61 +293,35 @@ def preview(num):
         finally:
             experimenter.preview_lock.release()
 
-
 def takePicture(obj):
     obj.truncate()
     obj.seek(0)
-
     camera.capture_file(obj, format="png")
-
     obj.seek(0)
-
 
 def grabExposure(time):
     global dayshutter, nightshutter
-    
     if time in ['day', 'night']:
         if time == 'day':
-            # Capture the image
-            picam2.capture_file(daystill)
-            
-            # Request the metadata from the last capture to get the shutter speed
-            metadata = picam2.capture_metadata()
+            camera.capture_file(daystill)
+            metadata = camera.capture_metadata()
             dayshutter = metadata['ExposureTime']
-            
         else:
-            # Set color effects to None (default) explicitly if needed via controls
-            picam2.set_controls({"ColorEffects": None})
-            
-            picam2.capture_file(nightstill)
-            
-            # Get metadata for night shutter
-            metadata = picam2.capture_metadata()
+            camera.set_controls({"ColorEffects": None})
+            camera.capture_file(nightstill)
+            metadata = camera.capture_metadata()
             nightshutter = metadata['ExposureTime']
-            
         return redirect(url_for('exposure', time=time))
     else:
         abort(404)
 
-
 @not_while_running
 @app.route('/focus/<int:value>')
 def focus(value):
-    # Constrain the value (ensure these limits match your specific hardware)
     value = min(1000, max(10, value))
-    
-    # picam2 is your Picamera2 instance
-    # LensPosition: 0.0 is usually infinity, higher values are closer
-    # Note: Some sensors use different scales, often 0 to 12. 
-    # If your 'value' is a raw register value (0-1000), use 'LensPosition'
-    
-    picam2.set_controls({"LensPosition": value})
-    
-    # Save to your config object
+    camera.set_controls({"LensPosition": value})
     cfg.set('focus', value)
-    
     return redirect(url_for('index'))
-
 
 @app.route('/experiment', methods=['GET', 'POST'])
 def experiment():
@@ -410,7 +341,6 @@ def experiment():
                 log("Starting new experiment.")
                 experimenter.next_status = 'run'
                 experimenter.status_change.set()
-                # give thread time to start before presenting template
                 time.sleep(1)
         elif request.form['action'] == 'stop':
             experimenter.stop()
@@ -429,7 +359,6 @@ def experiment():
                            status=experimenter.status, nshots=experimenter.nshots + 1, diskreq=diskreq, name=cfg.get('name'),
                            defname=experimenter.getDefName())
 
-
 @not_while_running
 def exposureMode(time):
     if time == 'day':
@@ -439,7 +368,6 @@ def exposureMode(time):
         })
         hw.LEDControl(False)
         return redirect(url_for('exposure', time='day'))
-
     elif time == 'night':
         camera.set_controls({
             "ExposureTime": 1000000 // cfg.get('nightshutter'),
@@ -447,34 +375,23 @@ def exposureMode(time):
         })
         hw.LEDControl(True)
         return redirect(url_for('exposure', time='night'))
-
     elif time == 'auto':
         camera.set_controls({
             "AeEnable": True
         })
         return redirect(url_for('index'))
-
     abort(404)
-
 
 @not_while_running
 @app.route('/shutter/<time>/<int:value>')
 def shutter(time, value):
     if time in ['day', 'night', 'live']:
-        # Keep your existing logic for constraining the value
         value = max(10, min(value, 1000))
-        
-        # Calculate exposure time in microseconds
-        # (1,000,000 / value)
         exposure_micros = 1000000 // value
-        
-        # In Picamera2, we use set_controls with a dictionary
-        picam2.set_controls({"ExposureTime": exposure_micros})
-        
+        camera.set_controls({"ExposureTime": exposure_micros})
         return redirect(url_for('index'))
     else:
         abort(404)
-
 
 @not_while_running
 @app.route('/exposure/<time>', methods=['GET', 'POST'])
@@ -490,43 +407,34 @@ def exposure(time):
             shutter = max(10, min(shutter, 1000))
             cfg.set(time + 'shutter', shutter)
             flash("New shutter speed for " + time + " images: 1/" + str(shutter))
-        
         iso = request.form.get('iso')
         if iso:
             iso = int(iso)
             iso = max(50, min(iso, 800))
             cfg.set(time + 'iso', iso)
-            # flash logic updated to use iso variable
             flash("New ISO for " + time + " images: " + str(iso))
-
         exposureMode(time)
         grabExposure(time)
     else:
         exposureMode(time)
         setLive('on')
-        
-        # camera.exposure_mode = 'off' becomes:
-        picam2.set_controls({"AeEnable": False})
+        camera.set_controls({"AeEnable": False})
 
-    # Convert microseconds back to 1/x shutter speed for the UI
     if nightshutter:
         ns = 1000000 // nightshutter
     if dayshutter:
         ds = 1000000 // dayshutter
 
-    # Get current AnalogueGain for the template (ISO equivalent)
-    current_gain = picam2.capture_metadata().get('AnalogueGain', 1.0)
-
+    current_gain = camera.capture_metadata().get('AnalogueGain', 1.0)
     return render_template('exposure.html', 
                            shutter=cfg.get(time+'shutter'), 
                            time=time,
                            nightshutter=ns, 
                            dayshutter=ds, 
                            name=cfg.get('name'), 
-                           iso=current_gain, # Pass gain as ISO equivalent
+                           iso=current_gain, 
                            dayiso=cfg.get('dayiso'), 
                            nightiso=cfg.get('nightiso'))
-
 
 @not_while_running
 @app.route('/calibrate', methods=['GET', 'POST'])
@@ -542,7 +450,6 @@ def calibrate():
     setLive('on')
     return render_template('calibrate.html', calibration=cfg.get('calibration'), name=cfg.get('name'))
 
-
 @not_while_running
 @app.route('/exit')
 def exit():
@@ -550,7 +457,6 @@ def exit():
     restarting = True
     signal.alarm(1)
     return redirect(url_for('wait_for_restart'))
-
 
 @not_while_running
 @app.route('/reboot')
@@ -560,13 +466,11 @@ def reboot():
     subprocess.Popen(['sudo', 'shutdown', '-r', 'now'])
     return redirect(url_for('index'))
 
-
 @not_while_running
 @app.route('/shutdown')
 def shutdown():
     subprocess.run(['sudo', 'shutdown', '-h', 'now'])
     return render_template('shutdown.html')
-
 
 @app.route('/settings', methods=['GET', 'POST'])
 def settings():
@@ -578,16 +482,13 @@ def settings():
                            debug=cfg.get('debug'), ip_addr=get_external_ip(), hotspot_ready=hostapd.is_ready(),
                            hotspot_enabled=hostapd.is_enabled(), ssid=ssid, passwd=passwd, rotation=cfg.get('rotated_camera'))
 
-
 @not_while_running
 @app.route('/restarting')
 def wait_for_restart():
     if restarting:
-        return render_template('restarting.html', refresh=5,
-                               message="Restarting Web UI...")
+        return render_template('restarting.html', refresh=5, message="Restarting Web UI...")
     else:
         return redirect(url_for('index'))
-
 
 @app.route('/files')
 def file_browser():
@@ -595,14 +496,12 @@ def file_browser():
     dir = os.path.expanduser('~')
     df = shutil.disk_usage(dir)
     diskspace = round(df.free / 1024 ** 3, 1)
-
     for entry in os.scandir(dir):
         if entry.is_dir() and os.path.dirname(entry.path) == dir and not entry.name.startswith('.') \
                 and all(os.path.exists(os.path.join(entry.path, f'plate{i+1}')) for i in range(4)):
             du = subprocess.check_output(['/usr/bin/du','-s', entry.path]).split()[0].decode('utf-8')
             dirs.append((entry.name, round(int(du)/1024**2, 1)))
     return render_template('filemanager.html', dirs=sorted(dirs), diskspace=diskspace, name=cfg.get('name'), running=experimenter.running)
-
 
 @app.route('/get/<exp_dir>.zip')
 def make_zipfile(exp_dir):
@@ -615,12 +514,10 @@ def make_zipfile(exp_dir):
     else:
         abort(404)
 
-
 @app.route('/delete/<exp_dir>/', methods=['GET', 'POST'])
 def delete_dir(exp_dir):
     dir = os.path.expanduser('~')
     del_dir = os.path.abspath(os.path.join(dir, exp_dir))
-
     if request.method == 'GET':
         return render_template('delete.html', dir=exp_dir)
     else:
@@ -632,9 +529,8 @@ def delete_dir(exp_dir):
             flash(f'Directory {exp_dir} deleted.')
             return redirect(url_for('file_browser'))
         else:
-            flash(f'Unable to delete directory "{exp_dir}".')
+            flash(f'Unable to delete directory \"{exp_dir}\".')
             return redirect(url_for('file_browser'))
-
 
 @app.route('/browse/<dir>')
 def dir_browser(dir):
@@ -642,7 +538,6 @@ def dir_browser(dir):
     dir = os.path.join(os.path.expanduser('~'), dir)
     if not verify_dir(dir):
         abort(404)
-
     files = {}
     for plate in ['plate' + str(i+1) for i in range(4)]:
         plate_files = []
@@ -652,50 +547,37 @@ def dir_browser(dir):
                 plate_files.append({'path': os.path.basename(os.path.dirname(entry.path)) + '/' + entry.name,
                                     'name': entry.name})
         files[plate] = sorted(plate_files, key=lambda x: x['name'])
-
     return render_template('browse.html', dir=check_dir, files=files, 
                            name=cfg.get('name'), running=experimenter.running)
     
-
 @app.route('/view/<dir>/<plate>/<file>')
 def view_file(dir, plate, file):
     file = os.path.abspath(os.path.join(os.path.expanduser('~'), dir, plate, file))
     if not verify_dir(dir) or not os.path.dirname(file).startswith(os.path.join(os.path.expanduser('~'), dir, plate)):
         flash('Invalid directory')
         return redirect(url_for('file_browser'))
-
     try:
         with open(file, 'rb') as f:
             img_data = f.read()
     except FileNotFoundError:
         abort(404)
-    
     return Response(img_data, mimetype='image/png')
 
-
 def verify_dir(check_dir):
-    '''checks that the directory is
-       1. immediately contained within the appropriate parent dir
-       2. does not contain initial dots, and
-       3. is indeed a directory'''
     check_dir = os.path.abspath(check_dir)
     dir = os.path.expanduser('~')
     return os.path.dirname(check_dir) == dir and not os.path.basename(check_dir).startswith('.') and os.path.isdir(check_dir)
-
 
 @app.route('/log')
 def get_log():
     p = subprocess.Popen(['/bin/journalctl', '--user-unit=spiro', '-n', '1000'], stdout=subprocess.PIPE)
     return Response(stream_popen(p), mimetype='text/plain')
 
-
 def stream_popen(p):
-    '''generator for sending STDOUT to a web client'''
     data = p.stdout.read(128*1024)
     while data:
         yield data
         data = p.stdout.read(128*1024)
-
 
 @app.route('/debug/<value>')
 def set_debug(value):
@@ -707,20 +589,17 @@ def set_debug(value):
         flash('Debug mode disabled.')
     return redirect(url_for('settings'))
 
-
 @app.route('/rotate_camera/<value>')
 def set_rotated_camera(value):
     if value == 'on':
         cfg.set('rotated_camera', True)
-        picam2.set_transform("hv") # Apply immediately
+        camera.set_transform("hv")
         flash('Camera rotation enabled.')
     elif value == 'off':
         cfg.set('rotated_camera', False)
-        picam2.set_transform("identity") # Apply immediately
+        camera.set_transform("identity")
         flash('Camera rotation disabled.')
-    
     return redirect(url_for('settings'))
-
 
 def get_external_ip():
     """returns the IPv4 address of eth0"""
@@ -730,9 +609,7 @@ def get_external_ip():
         ip_match = re.search(r'\s(\d+\.\d+\.\d+\.\d+)/', data)
         if ip_match:
             return ip_match.group(1)
-
     return 'Unknown'
-
 
 @app.route('/hotspot/<value>')
 def set_hotspot(value):
@@ -769,29 +646,18 @@ def start(cam, myhw):
     hw = myhw
     experimenter = Experimenter(hw=hw, cam=cam)
     experimenter.start()
-
     if cfg.get('secret') == '':
-        # hashlib.sha1 logic remains the same
         secret = hashlib.sha1(os.urandom(16))
         cfg.set('secret', secret.hexdigest())
-    
     app.secret_key = cfg.get('secret')
-
     try:
         # 1. Update Meter Mode
-        # options are usually: CentreWeighted, Spot, Matrix, Custom
-        camera.set_controls({"AeMeteringMode": 1}) # 1 is often 'Spot' in libcamera
-
+        camera.set_controls({"AeMeteringMode": 1})  # 1 is often 'Spot' in libcamera
         # 2. Update Rotation (Transform)
         if cfg.get('rotated_camera'):
-            # In libcamera, 'rot90' is a valid transform name
             camera.set_transform("rot90")
-
         setLive('on')
-        
-        # Web server logic remains the same
         serve(app, listen="*:8080", threads=8, channel_timeout=20)
-        
     finally:
         stop()
 

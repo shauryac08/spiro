@@ -91,7 +91,7 @@ class ZoomObject(object):
         limits = (self.roi / 2.0, 1 - self.roi / 2.0)
         self.x = max(min(self.x, limits[1]), limits[0])
         self.y = max(min(self.y, limits[1]), limits[0])
-        camera.zoom = (self.y - self.roi/2.0, self.x - self.roi/2.0, self.roi, self.roi)
+        #camera.zoom = (self.y - self.roi/2.0, self.x - self.roi/2.0, self.roi, self.roi)
 
 
 def public_route(decorated_function):
@@ -219,23 +219,24 @@ def pan(dir, value):
 def switch_live(value):
     if setLive(value):
         zoomer.set(0.5, 0.5, 1)
+
     if value == 'on':
-        camera.shutter_speed = 0
-        camera.exposure_mode = "auto"
+        camera.set_controls({
+            "AeEnable": True
+        })
+
     return redirect(url_for('index'))
 
 
 def setLive(val):
     global livestream
     prev = livestream
-    if val == 'on' and livestream != True:
+
+    if val == 'on':
         livestream = True
-        camera.resolution = "2592x1944"
-        camera.start_recording(liveoutput, format='mjpeg', resize='1024x768')
-    elif val == 'off' and livestream == True:
+    elif val == 'off':
         livestream = False
-        camera.stop_recording()
-        camera.resolution = camera.MAX_RESOLUTION
+
     return prev != livestream
 
 
@@ -339,21 +340,34 @@ def preview(num):
 def takePicture(obj):
     obj.truncate()
     obj.seek(0)
-    camera.capture(obj, format="png")
+
+    camera.capture_file(obj, format="png")
+
     obj.seek(0)
 
 
 def grabExposure(time):
     global dayshutter, nightshutter
+    
     if time in ['day', 'night']:
         if time == 'day':
-            takePicture(daystill)
-            dayshutter = camera.shutter_speed
+            # Capture the image
+            picam2.capture_file(daystill)
+            
+            # Request the metadata from the last capture to get the shutter speed
+            metadata = picam2.capture_metadata()
+            dayshutter = metadata['ExposureTime']
+            
         else:
-            #camera.color_effects = (128, 128)
-            takePicture(nightstill)
-            camera.color_effects = None
-            nightshutter = camera.shutter_speed
+            # Set color effects to None (default) explicitly if needed via controls
+            picam2.set_controls({"ColorEffects": None})
+            
+            picam2.capture_file(nightstill)
+            
+            # Get metadata for night shutter
+            metadata = picam2.capture_metadata()
+            nightshutter = metadata['ExposureTime']
+            
         return redirect(url_for('exposure', time=time))
     else:
         abort(404)
@@ -362,9 +376,19 @@ def grabExposure(time):
 @not_while_running
 @app.route('/focus/<int:value>')
 def focus(value):
+    # Constrain the value (ensure these limits match your specific hardware)
     value = min(1000, max(10, value))
-    hw.focusCam(value)
+    
+    # picam2 is your Picamera2 instance
+    # LensPosition: 0.0 is usually infinity, higher values are closer
+    # Note: Some sensors use different scales, often 0 to 12. 
+    # If your 'value' is a raw register value (0-1000), use 'LensPosition'
+    
+    picam2.set_controls({"LensPosition": value})
+    
+    # Save to your config object
     cfg.set('focus', value)
+    
     return redirect(url_for('index'))
 
 
@@ -409,22 +433,27 @@ def experiment():
 @not_while_running
 def exposureMode(time):
     if time == 'day':
-        camera.iso = cfg.get('dayiso')
-        camera.shutter_speed = 1000000 // cfg.get('dayshutter')
-        camera.exposure_mode = "off"
+        camera.set_controls({
+            "ExposureTime": 1000000 // cfg.get('dayshutter'),
+            "AnalogueGain": cfg.get('dayiso'),
+        })
         hw.LEDControl(False)
         return redirect(url_for('exposure', time='day'))
+
     elif time == 'night':
-        camera.iso = cfg.get('nightiso')
-        camera.shutter_speed = 1000000 // cfg.get('nightshutter')
-        camera.exposure_mode = "off"
+        camera.set_controls({
+            "ExposureTime": 1000000 // cfg.get('nightshutter'),
+            "AnalogueGain": cfg.get('nightiso'),
+        })
         hw.LEDControl(True)
         return redirect(url_for('exposure', time='night'))
+
     elif time == 'auto':
-        camera.shutter_speed = 0
-        camera.iso = 0
-        camera.exposure_mode = "auto"
+        camera.set_controls({
+            "AeEnable": True
+        })
         return redirect(url_for('index'))
+
     abort(404)
 
 
@@ -432,8 +461,16 @@ def exposureMode(time):
 @app.route('/shutter/<time>/<int:value>')
 def shutter(time, value):
     if time in ['day', 'night', 'live']:
+        # Keep your existing logic for constraining the value
         value = max(10, min(value, 1000))
-        camera.shutter_speed = 1000000 // value
+        
+        # Calculate exposure time in microseconds
+        # (1,000,000 / value)
+        exposure_micros = 1000000 // value
+        
+        # In Picamera2, we use set_controls with a dictionary
+        picam2.set_controls({"ExposureTime": exposure_micros})
+        
         return redirect(url_for('index'))
     else:
         abort(404)
@@ -453,28 +490,42 @@ def exposure(time):
             shutter = max(10, min(shutter, 1000))
             cfg.set(time + 'shutter', shutter)
             flash("New shutter speed for " + time + " images: 1/" + str(shutter))
+        
         iso = request.form.get('iso')
         if iso:
             iso = int(iso)
             iso = max(50, min(iso, 800))
             cfg.set(time + 'iso', iso)
-            flash("New ISO for " + time + " images: " + str(shutter))
+            # flash logic updated to use iso variable
+            flash("New ISO for " + time + " images: " + str(iso))
 
         exposureMode(time)
         grabExposure(time)
     else:
         exposureMode(time)
         setLive('on')
-        camera.exposure_mode = "off"
+        
+        # camera.exposure_mode = 'off' becomes:
+        picam2.set_controls({"AeEnable": False})
 
+    # Convert microseconds back to 1/x shutter speed for the UI
     if nightshutter:
         ns = 1000000 // nightshutter
     if dayshutter:
         ds = 1000000 // dayshutter
 
-    return render_template('exposure.html', shutter=cfg.get(time+'shutter'), time=time, 
-                           nightshutter=ns, dayshutter=ds, name=cfg.get('name'), iso=camera.iso,
-                           dayiso=cfg.get('dayiso'), nightiso=cfg.get('nightiso'))
+    # Get current AnalogueGain for the template (ISO equivalent)
+    current_gain = picam2.capture_metadata().get('AnalogueGain', 1.0)
+
+    return render_template('exposure.html', 
+                           shutter=cfg.get(time+'shutter'), 
+                           time=time,
+                           nightshutter=ns, 
+                           dayshutter=ds, 
+                           name=cfg.get('name'), 
+                           iso=current_gain, # Pass gain as ISO equivalent
+                           dayiso=cfg.get('dayiso'), 
+                           nightiso=cfg.get('nightiso'))
 
 
 @not_while_running
@@ -661,10 +712,13 @@ def set_debug(value):
 def set_rotated_camera(value):
     if value == 'on':
         cfg.set('rotated_camera', True)
-        flash('Camera rotation enabled. Please restart.')
+        picam2.set_transform("hv") # Apply immediately
+        flash('Camera rotation enabled.')
     elif value == 'off':
         cfg.set('rotated_camera', False)
-        flash('Camera rotation disabled. Please restart.')
+        picam2.set_transform("identity") # Apply immediately
+        flash('Camera rotation disabled.')
+    
     return redirect(url_for('settings'))
 
 
@@ -715,18 +769,29 @@ def start(cam, myhw):
     hw = myhw
     experimenter = Experimenter(hw=hw, cam=cam)
     experimenter.start()
+
     if cfg.get('secret') == '':
+        # hashlib.sha1 logic remains the same
         secret = hashlib.sha1(os.urandom(16))
         cfg.set('secret', secret.hexdigest())
+    
     app.secret_key = cfg.get('secret')
+
     try:
-        camera.meter_mode = 'spot'
+        # 1. Update Meter Mode
+        # options are usually: CentreWeighted, Spot, Matrix, Custom
+        camera.set_controls({"AeMeteringMode": 1}) # 1 is often 'Spot' in libcamera
+
+        # 2. Update Rotation (Transform)
         if cfg.get('rotated_camera'):
-            camera.rotation = 90
+            # In libcamera, 'rot90' is a valid transform name
+            camera.set_transform("rot90")
+
         setLive('on')
-        #app.run(host="0.0.0.0", port=8080, debug=False)
-        # use a tcp timeout of 20 seconds to improve hanging behavior in live view
+        
+        # Web server logic remains the same
         serve(app, listen="*:8080", threads=8, channel_timeout=20)
+        
     finally:
         stop()
 

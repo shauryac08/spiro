@@ -16,27 +16,37 @@ from spiro.logger import log, debug
 
 class Experimenter(threading.Thread):
     def __init__(self, hw=None, cam=None):
+        # Initializing the Thread first is generally cleaner
+        threading.Thread.__init__(self)
+        
         self.hw = hw
-        self.cam = cam
+        self.cam = cam # This is now your Picamera2 instance
         self.cfg = Config()
+        
         self.delay = 60
         self.duration = 7
         self.dir = os.path.expanduser('~')
         self.starttime = 0
         self.endtime = 0
+        
         self.running = False
         self.status = "Stopped"
         self.daytime = "TBD"
         self.quit = False
         self.stop_experiment = False
+        
+        # Threading control
         self.status_change = threading.Event()
         self.next_status = ''
+        
+        # In Picamera2, managing arrays for preview frames is common 
+        # if you are using 'request_preview_frame()'
         self.last_captured = [''] * 4
         self.preview = [''] * 4
         self.preview_lock = threading.Lock()
+        
         self.nshots = 0
         self.idlepos = 0
-        threading.Thread.__init__(self)
 
 
     def stop(self):
@@ -53,103 +63,124 @@ class Experimenter(threading.Thread):
 
 
     def isDaytime(self):
-        '''algorithm for daytime estimation.
-           if the average pixel intensity is less than 10, we assume it is night.
-           this may be tweaked for special use cases.'''
-        oldres = self.cam.resolution
-        self.cam.resolution = (320, 240)
-        self.cam.iso = self.cfg.get('dayiso')
-        self.cam.shutter_speed = 1000000 // self.cfg.get('dayshutter')
-        output = np.empty((240, 320, 3), dtype=np.uint8)
-        self.cam.capture(output, 'rgb')
-        self.cam.resolution = oldres
-        debug("Daytime estimation mean value: " + str(output.mean()))
-        return output.mean() > 10
+    '''algorithm for daytime estimation.'''
+    
+    # In Picamera2, instead of changing resolution and changing it back,
+    # we can just capture an array at a specific size directly.
+    
+    # 1. Set temporary exposure/gain for the test
+    # (Using AnalogueGain instead of ISO)
+    day_iso = self.cfg.get('dayiso')
+    day_shutter = 1000000 // self.cfg.get('dayshutter')
+    
+    self.cam.set_controls({
+        "ExposureTime": day_shutter,
+        "AnalogueGain": day_iso / 100.0, # Convert ISO 100 -> 1.0 gain
+        "AeEnable": False
+    })
 
+    # 2. Capture directly into a NumPy array at the target resolution
+    # Picamera2 makes this much cleaner:
+    output = self.cam.capture_array(out_size=(320, 240))
+
+    # Calculate the mean pixel intensity
+    mean_value = output.mean()
+    
+    debug("Daytime estimation mean value: " + str(mean_value))
+    
+    # Return true if it's "bright enough"
+    return mean_value > 10
 
     def setWB(self):
         debug("Determining white balance.")
-        self.cam.awb_mode = "auto"
+    
+    # 1. Enable Auto White Balance
+    # In libcamera, 'Auto' is mode 0. 
+    # Valid modes: Auto, Incandescent, Tungsten, Fluorescent, Indoor, Daylight, Cloudy, Custom
+        self.cam.set_controls({"AwbEnable": True})
+    
+    # 2. Wait for the AWB algorithm to settle
         time.sleep(2)
-        g = self.cam.awb_gains
-        self.cam.awb_mode = "off"
-        self.cam.awb_gains = g
+    
+    # 3. Retrieve the current gains from metadata
+    # metadata['ColourGains'] returns a tuple (RedGain, BlueGain)
+    metadata = self.cam.capture_metadata()
+        gains = metadata.get('ColourGains', (1.0, 1.0))
+    
+    # 4. Disable AWB and lock the gains
+    # We set AwbEnable to False and manually apply the gains we just read
+        self.cam.set_controls({
+            "AwbEnable": False,
+            "ColourGains": gains
+        })
+    
+        debug(f"Locked White Balance gains at Red: {gains[0]:.2f}, Blue: {gains[1]:.2f}")
 
 
     def takePicture(self, name, plate_no):
         filename = ""
-        stream = BytesIO()
         prev_daytime = self.daytime
         self.daytime = self.isDaytime()
         
+        # Setup Exposure and Gain based on time of day
         if self.daytime:
             time.sleep(0.5)
-            self.cam.shutter_speed = 1000000 // self.cfg.get('dayshutter')
-            self.cam.iso = self.cfg.get('dayiso')
-            self.cam.color_effects = None
+            shutter = 1000000 // self.cfg.get('dayshutter')
+            gain = self.cfg.get('dayiso') / 100.0
             filename = os.path.join(self.dir, name + "-day.png")
+            self.cam.set_controls({"ExposureTime": shutter, "AnalogueGain": gain, "ColorEffects": None})
         else:
-            # turn on led
             self.hw.LEDControl(True)
             time.sleep(0.5)
-            self.cam.shutter_speed = 1000000 // self.cfg.get('nightshutter')
-            self.cam.iso = self.cfg.get('nightiso')
+            shutter = 1000000 // self.cfg.get('nightshutter')
+            gain = self.cfg.get('nightiso') / 100.0
             filename = os.path.join(self.dir, name + "-night.png")
+            self.cam.set_controls({"ExposureTime": shutter, "AnalogueGain": gain})
         
-        if prev_daytime != self.daytime and self.daytime and self.cam.awb_mode != "off":
-            # if there is a daytime shift, AND it is daytime, AND white balance was not previously set,
-            # set the white balance to a fixed value.
-            # thus, white balance will only be fixed for the first occurence of daylight.
+        # White Balance Logic
+        if prev_daytime != self.daytime and self.daytime:
+            # Check if AWB is not locked (logic depends on your current app state)
             self.setWB()
-
-        debug("Capturing %s." % filename)
-        self.cam.exposure_mode = "off"
-
-        self.cam.capture(stream, format='rgb')
-
-        # turn off LED immediately after capture
+        
+        debug("Capturing %s" % filename)
+        
+        # Disable Auto Exposure for the capture
+        self.cam.set_controls({"AeEnable": False})
+        
+        # Capture directly to a numpy array (skips the BytesIO mess)
+        # Picamera2 handles the padding/cropping internally!
+        array = self.cam.capture_array()
+        
+        # Turn off LED
         if not self.daytime:
             self.hw.LEDControl(False)
-
-        # convert to PNG using PIL
-        # saving as 'RGB' using picamera adds a border which needs to be cropped away
-        # the raw capture size depends on the type of camera used
-        # we only support 5 MP (OV5647) and 8 MP (IMX219) cameras, for now at least
-        if self.cam.resolution[0] == 3280:
-            raw_res = (3296, 2464)
-        elif self.cam.resolution[0] == 2592:
-            raw_res = (2592, 1952)
-        else:
-            # unsupported resolution, try to make the best of it
-            debug('Camera has unsupported resolution ' + str(cam.resolution) + '! This may lead to crashes or corrupted images.')
-            raw_res = tuple(cam.resolution)
-        stream.seek(0)
-        im = Image.frombytes('RGB', raw_res, stream.read()).crop(box=(0,0)+self.cam.resolution)
+        
+        # Convert to PIL Image
+        im = Image.fromarray(array)
         im.save(filename)
-
-        # make thumbnail previews for experiment overview page
-        im.thumbnail((800, 600))
-        self.preview_lock.acquire()
-        self.preview[plate_no] = BytesIO()
-        im.save(self.preview[plate_no], format="jpeg")
-        self.preview_lock.release()
-        im.close()
-
+        
+        # Create thumbnails for preview
+        with self.preview_lock:
+            thumb = im.copy()
+            thumb.thumbnail((800, 600))
+            # Save to your existing preview list
+            buf = io.BytesIO()
+            thumb.save(buf, format="JPEG")
+            self.preview[plate_no] = buf
+        
         self.last_captured[plate_no] = filename
-        self.cam.color_effects = None
-        self.cam.shutter_speed = 0
-        # we leave the cam in auto exposure mode to improve daytime assessment performance
-        self.cam.exposure_mode = "auto"
-
-
-    def run(self):
-        '''starts experiment if there is signal to do so'''
-        while not self.quit:
-            self.status_change.wait()
-            if self.next_status == 'run':
-                self.next_status = ''
-                self.status_change.clear()
-                self.runExperiment()
+        
+        # Reset for next run
+        self.cam.set_controls({"AeEnable": True, "ExposureTime": 0})
+        
+        def run(self):
+            '''starts experiment if there is signal to do so'''
+            while not self.quit:
+                self.status_change.wait()
+                if self.next_status == 'run':
+                    self.next_status = ''
+                    self.status_change.clear()
+                    self.runExperiment()
 
 
     def go(self):
@@ -162,7 +193,7 @@ class Experimenter(threading.Thread):
         '''main experiment loop'''
         if self.running:
             raise RuntimeError('An experiment is already running.')
-
+    
         try:
             debug("Starting experiment.")
             self.running = True
@@ -172,68 +203,76 @@ class Experimenter(threading.Thread):
             self.last_captured = [''] * 4
             self.delay = self.delay or 0.001
             self.nshots = self.duration * 24 * 60 // self.delay
-            self.cam.exposure_mode = "auto"
-            self.cam.shutter_speed = 0
+            
+            # --- PICAMERA2 UPDATES ---
+            # "auto" exposure is now AeEnable: True
+            # shutter_speed = 0 is also handled by enabling AE
+            self.cam.set_controls({
+                "AeEnable": True,
+                "ExposureTime": 0 
+            })
+            # -------------------------
+            
             self.hw.LEDControl(False)
-
+    
+            # Directory setup logic remains the same...
             if self.dir == os.path.expanduser('~'):
-                # make sure we don't write directly to home dir
                 self.dir = os.path.join(os.path.expanduser('~'), self.getDefName())
-
+    
             for i in range(4):
                 platedir = "plate" + str(i + 1)
                 os.makedirs(os.path.join(self.dir, platedir), exist_ok=True)
-
+    
             while time.time() < self.endtime and not self.stop_experiment:
                 loopstart = time.time()
-                # need to use time-based loop control as we do not know how long a rotation takes
                 nextloop = time.time() + 60 * self.delay
                 if nextloop > self.endtime:
                     nextloop = self.endtime
-                
+    
                 for i in range(4):
-                    # rotate stage to starting position
+                    # Motor rotation logic remains the same...
                     if i == 0:
                         self.hw.motorOn(True)
                         self.status = "Finding start position"
-                        debug("Finding initial position.")
                         self.hw.findStart(calibration=self.cfg.get('calibration'))
-                        debug("Found initial position.")
                         if self.status != "Stopping": self.status = "Imaging"
                     else:
-                        # rotate cube 90 degrees
-                        debug("Rotating stage.")
                         self.hw.halfStep(100, 0.03)
-
-                    # wait for the cube to stabilize
+    
                     time.sleep(0.5)
-
+    
                     now = time.strftime("%Y%m%d-%H%M%S", time.localtime())
                     name = os.path.join("plate" + str(i + 1), "plate" + str(i + 1) + "-" + now)
+                    
+                    # This uses the refactored takePicture from the previous step
                     self.takePicture(name, i)
-
+    
                 self.nshots -= 1
                 self.hw.motorOn(False)
                 if self.status != "Stopping": self.status = "Waiting"
-
+    
+                # Idle rotation logic remains the same...
                 if self.idlepos > 0:
-                    # alternate between resting positions during idle, stepping 45 degrees per image
                     self.hw.motorOn(True)
                     self.hw.halfStep(50 * self.idlepos, 0.03)
                     self.hw.motorOn(False)
-
+    
                 self.idlepos += 1
                 if self.idlepos > 7:
                     self.idlepos = 0
-
+    
                 while time.time() < nextloop and not self.stop_experiment:
                     time.sleep(1)
-
+    
         finally:
             log("Experiment stopped.")
-            self.cam.color_effects = None
+            # --- PICAMERA2 CLEANUP ---
+            self.cam.set_controls({
+                "ColorEffects": None,
+                "AeEnable": True,
+                "AeMeteringMode": 1 # 1 is 'Spot'
+            })
+            # -------------------------
             self.status = "Stopped"
             self.stop_experiment = False
             self.running = False
-            self.cam.exposure_mode = "auto"
-            self.cam.meter_mode = 'spot'

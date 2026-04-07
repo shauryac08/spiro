@@ -7,7 +7,7 @@
 import os
 import textwrap
 import RPi.GPIO as gpio
-from picamera import PiCamera
+from picamera2 import Picamera2
 from spiro.config import Config
 from spiro.hwcontrol import HWControl
 from spiro.logger import log, debug
@@ -44,15 +44,13 @@ options = parser.parse_args()
 
 
 def initCam():
-    cam = PiCamera()
-    # cam.framerate dictates longest exposure (1/cam.framerate)
-    cam.framerate = 5
-    cam.iso = 50
-    cam.resolution = cam.MAX_RESOLUTION
-    if cfg.get('rotated_camera'):
-        cam.rotation = 90
-    cam.image_denoise = False
-    hw.focusCam(cfg.get('focus'))
+    cam = Picamera2()
+
+    config = cam.create_still_configuration()
+    cam.configure(config)
+
+    cam.start()
+
     return cam
 
 

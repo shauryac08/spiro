@@ -45,12 +45,9 @@ options = parser.parse_args()
 
 def initCam():
     cam = Picamera2()
-
     config = cam.create_still_configuration()
     cam.configure(config)
-
     cam.start()
-
     return cam
 
 

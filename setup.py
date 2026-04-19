@@ -18,7 +18,7 @@ def get_version_and_cmdclass(package_path):
 version, cmdclass = get_version_and_cmdclass("spiro")
 
 setup(name = 'spiro',
-      version = version,
+      version = "1.0.0",
       cmdclass = cmdclass,
       packages = find_packages(),
       scripts = ['bin/spiro'],

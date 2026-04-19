@@ -653,9 +653,6 @@ def start(cam, myhw):
     try:
         # 1. Update Meter Mode
         camera.set_controls({"AeMeteringMode": 1})  # 1 is often 'Spot' in libcamera
-        # 2. Update Rotation (Transform)
-        if cfg.get('rotated_camera'):
-            camera.set_transform("rot90")
         setLive('on')
         serve(app, listen="*:8080", threads=8, channel_timeout=20)
     finally:

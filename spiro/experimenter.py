@@ -63,33 +63,33 @@ class Experimenter(threading.Thread):
 
 
     def isDaytime(self):
-    '''algorithm for daytime estimation.'''
-    
-    # In Picamera2, instead of changing resolution and changing it back,
-    # we can just capture an array at a specific size directly.
-    
-    # 1. Set temporary exposure/gain for the test
-    # (Using AnalogueGain instead of ISO)
-    day_iso = self.cfg.get('dayiso')
-    day_shutter = 1000000 // self.cfg.get('dayshutter')
-    
-    self.cam.set_controls({
-        "ExposureTime": day_shutter,
-        "AnalogueGain": day_iso / 100.0, # Convert ISO 100 -> 1.0 gain
-        "AeEnable": False
-    })
+        '''algorithm for daytime estimation.'''
+        
+        # In Picamera2, instead of changing resolution and changing it back,
+        # we can just capture an array at a specific size directly.
+        
+        # 1. Set temporary exposure/gain for the test
+        # (Using AnalogueGain instead of ISO)
+        day_iso = self.cfg.get('dayiso')
+        day_shutter = 1000000 // self.cfg.get('dayshutter')
+        
+        self.cam.set_controls({
+            "ExposureTime": day_shutter,
+            "AnalogueGain": day_iso / 100.0, # Convert ISO 100 -> 1.0 gain
+            "AeEnable": False
+        })
 
-    # 2. Capture directly into a NumPy array at the target resolution
-    # Picamera2 makes this much cleaner:
-    output = self.cam.capture_array(out_size=(320, 240))
+        # 2. Capture directly into a NumPy array at the target resolution
+        # Picamera2 makes this much cleaner:
+        output = self.cam.capture_array(out_size=(320, 240))
 
-    # Calculate the mean pixel intensity
-    mean_value = output.mean()
-    
-    debug("Daytime estimation mean value: " + str(mean_value))
-    
-    # Return true if it's "bright enough"
-    return mean_value > 10
+        # Calculate the mean pixel intensity
+        mean_value = output.mean()
+        
+        debug("Daytime estimation mean value: " + str(mean_value))
+        
+        # Return true if it's "bright enough"
+        return mean_value > 10
 
     def setWB(self):
         debug("Determining white balance.")
@@ -104,16 +104,16 @@ class Experimenter(threading.Thread):
     
     # 3. Retrieve the current gains from metadata
     # metadata['ColourGains'] returns a tuple (RedGain, BlueGain)
-    metadata = self.cam.capture_metadata()
+        metadata = self.cam.capture_metadata()
         gains = metadata.get('ColourGains', (1.0, 1.0))
-    
+
     # 4. Disable AWB and lock the gains
     # We set AwbEnable to False and manually apply the gains we just read
         self.cam.set_controls({
             "AwbEnable": False,
             "ColourGains": gains
         })
-    
+
         debug(f"Locked White Balance gains at Red: {gains[0]:.2f}, Blue: {gains[1]:.2f}")
 
 
